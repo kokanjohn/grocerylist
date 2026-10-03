@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f3e46">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Groceries">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Grocery Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Figtree:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --floor: #000000;
+    --floor-line: #dde3e7;
+    --ink: #1f2a30;
+    --ink-soft: #5b6a73;
+    --paper: #ffffff;
+    --shelf: #cfd8de;
+    --shelf-dark: #b6c2ca;
+    --header: #2f3e46;
+    --radius: 18px;
+    --font-display: "Bricolage Grotesque", "Avenir Next", "Trebuchet MS", system-ui, sans-serif;
+    --font-body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --floor: #000000;
+      --floor-line: #222c32;
+      --ink: #eef2f4;
+      --ink-soft: #9aabb5;
+      --paper: #26323a;
+      --shelf: #33424b;
+      --shelf-dark: #41525d;
+      --header: #11181c;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--font-body);
+    color: var(--ink);
+    background: var(--floor);
+    overflow: hidden;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* ---------- App shell ---------- */
+  .app { height: 100%; display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 16px; background: var(--header); color: #fff; flex: none;
+  }
+  header h1 { font-family: var(--font-display); font-weight: 800; font-size: 1.05rem; margin: 0; letter-spacing: .01em; }
+  .total { font-size: .85rem; font-weight: 600; opacity: .85; }
+  .hright { display: flex; align-items: center; gap: 16px; }
+  .sync { font-size: .75rem; font-weight: 600; opacity: .85; display: flex; align-items: center; }
+  .sync::before { content: ""; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--dot, #8a98a1); }
+  .sync[data-s="synced"] { --dot: #6bd18a; }
+  .sync[data-s="saving"], .sync[data-s="connecting"] { --dot: #f2c14e; }
+  .sync[data-s="offline"], .sync[data-s="error"] { --dot: #f28b82; }
+
+  /* ---------- Store map ---------- */
+  .map {
+    flex: 1; min-height: 0; margin: 10px;
+    display: grid; gap: 8px;
+    grid-template-columns: 1.15fr 1fr .6fr 1.2fr 1.8fr 1.15fr;
+    grid-template-rows: .8fr 2fr .85fr;
+    background: #000;
+  }
+  .tile {
+    --c: #888; --c-soft: #eee;
+    position: relative; border: 0; padding: 8px; cursor: pointer;
+    border-radius: var(--radius);
+    background: var(--c); color: #2b3340;
+    font-family: var(--font-display); font-weight: 700;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    box-shadow: 0 3px 0 rgba(0,0,0,.18);
+    transition: transform .08s ease, box-shadow .08s ease;
+    min-width: 0; min-height: 0;
+  }
+  .tile:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(0,0,0,.18); }
+  .tile:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  .tile .icon svg { display: block; }
+  .tile .icon { font-size: clamp(1.3rem, 5.2vh, 2.4rem); line-height: 1; }
+  .tile .label { font-size: clamp(.8rem, 3.3vh, 1.25rem); line-height: 1.1; text-align: center; }
+  .tile .sub { font-family: var(--font-body); font-size: clamp(.65rem, 2.4vh, .85rem); font-weight: 600; opacity: .9; }
+  .badge {
+    position: absolute; top: 6px; right: 6px; min-width: 34px; height: 34px; padding: 0 9px;
+    border-radius: 17px; background: #fff; color: #000; font-family: var(--font-body);
+    font-size: 1.15rem; font-weight: 800; display: none; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3);
+  }
+  .tile.has-items .badge { display: flex; }
+  .tile.dark-text { color: #12303a; }
+
+  .tile.aisle .label { font-size: clamp(1.1rem, 4.6vh, 1.8rem); }
+  .tile.thin .label { writing-mode: vertical-rl; font-size: clamp(1rem, 4.6vh, 1.6rem); letter-spacing: .04em; }
+
+  /* ---------- Modal ---------- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(10,18,22,.55);
+    display: none; align-items: center; justify-content: center; z-index: 10;
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  }
+  .backdrop.open { display: flex; }
+  .sheet {
+    --c: #888;
+    width: min(760px, 100%); height: min(440px, 100%);
+    background: var(--paper); border-radius: 22px; overflow: hidden;
+    display: grid; grid-template-columns: 1.1fr 1fr; grid-template-rows: auto 1fr;
+    box-shadow: 0 20px 50px rgba(0,0,0,.4);
+    animation: pop .16s ease-out;
+  }
+  @keyframes pop { from { transform: scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
+  .sheet-head {
+    grid-column: 1 / -1; background: var(--c); color: #2b3340;
+    display: flex; align-items: center; justify-content: space-between; padding: 8px 10px 8px 18px;
+  }
+  .sheet-head.dark-text { color: #12303a; }
+  .sheet-head h2 { margin: 0; font-family: var(--font-display); font-size: 1.2rem; font-weight: 800; }
+  .close {
+    width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
+    background: rgba(0,0,0,.12); color: inherit; font-size: 1.3rem; font-weight: 700; line-height: 1;
+  }
+  .pane { min-height: 0; display: flex; flex-direction: column; padding: 12px 14px; }
+  .pane[hidden] { display: none; }
+  .pane + .pane { border-left: 1px solid var(--shelf); }
+  .pane-title { font-size: .85rem; font-weight: 700; color: var(--ink-soft); margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+  .clear-btn {
+    border: 0; background: var(--shelf); color: var(--ink); font: inherit; font-size: .8rem; font-weight: 700;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  }
+  .clear-btn[disabled] { opacity: .4; cursor: default; }
+
+  .list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+  .list li {
+    display: flex; align-items: center; gap: 4px; margin-bottom: 6px;
+    background: color-mix(in srgb, var(--c) 12%, var(--paper));
+    border-radius: 12px;
+  }
+  .list .item {
+    flex: 1; display: flex; align-items: center; gap: 10px; text-align: left;
+    border: 0; background: none; color: var(--ink); font: inherit; font-size: 1rem; font-weight: 600;
+    padding: 11px 12px; cursor: pointer; min-width: 0;
+  }
+  .list .item span.name { overflow: hidden; text-overflow: ellipsis; }
+  .box {
+    flex: none; width: 24px; height: 24px; border-radius: 7px; border: 2.5px solid color-mix(in srgb, var(--c) 55%, #4a4a58);
+    display: grid; place-items: center; color: #2b3340; font-size: .9rem; font-weight: 800;
+  }
+  li.done .box { background: var(--c); border-color: color-mix(in srgb, var(--c) 55%, #4a4a58); }
+  li.done .name { text-decoration: line-through; color: var(--ink-soft); }
+  li.done { opacity: .75; }
+  .remove {
+    flex: none; width: 44px; height: 44px; border: 0; background: none; color: var(--ink-soft);
+    font-size: 1.3rem; cursor: pointer; border-radius: 12px;
+  }
+  .txt { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+  .note { font-size: .8rem; font-weight: 600; color: var(--ink-soft); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; }
+  li.editing { outline: 2px solid color-mix(in srgb, var(--c) 70%, #4a4a58); }
+  .edit-btn {
+    flex: none; width: 38px; height: 38px; border: 0; background: none; color: var(--ink-soft);
+    font-size: 1.05rem; cursor: pointer; border-radius: 10px;
+  }
+  .edit-btn.has-note { color: var(--ink); }
+  .edit-btn.hint { color: #2b3340; background: color-mix(in srgb, var(--c) 40%, var(--paper)); }
+  .save-def {
+    flex: none; border: 0; background: color-mix(in srgb, var(--c) 45%, var(--paper)); color: #2b3340;
+    font: inherit; font-size: .75rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .chip .x { margin-left: 8px; padding: 0 2px; font-size: .75rem; opacity: .55; }
+  .empty { color: var(--ink-soft); font-size: .95rem; padding: 14px 4px; }
+
+  .add-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .add-row input {
+    flex: 1; min-width: 0; font: inherit; font-size: 1rem; padding: 11px 12px;
+    border: 2px solid var(--shelf); border-radius: 12px; background: var(--paper); color: var(--ink);
+  }
+  .add-row input:focus { outline: none; border-color: var(--c); }
+  .add-row button {
+    border: 0; border-radius: 12px; background: var(--c); color: #2b3340; font: inherit; font-weight: 800;
+    padding: 0 18px; cursor: pointer; font-size: 1rem;
+  }
+  .add-row button.dark-text { color: #12303a; }
+  .chips { overflow-y: auto; flex: 1; display: flex; flex-wrap: wrap; gap: 7px; align-content: flex-start; }
+  .chip {
+    border: 2px solid var(--shelf); background: var(--paper); color: var(--ink);
+    font: inherit; font-size: .9rem; font-weight: 600; padding: 8px 12px; border-radius: 999px; cursor: pointer;
+  }
+  .chip:active { background: color-mix(in srgb, var(--c) 20%, var(--paper)); }
+  .chip.on { background: var(--shelf); color: var(--ink-soft); border-color: transparent; }
+  .chip.on::before { content: "✓ "; }
+
+  /* ---------- Toast ---------- */
+  .toast {
+    position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translate(-50%, 20px);
+    background: var(--header); color: #fff; padding: 10px 10px 10px 18px; border-radius: 999px;
+    display: flex; align-items: center; gap: 14px; font-weight: 600; font-size: .9rem;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 20;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  .toast button { border: 0; background: rgba(255,255,255,.2); color: #fff; font: inherit; font-weight: 700; padding: 7px 14px; border-radius: 999px; cursor: pointer; }
+
+  /* ---------- Landscape-only ---------- */
+  .rotate {
+    display: none; position: fixed; inset: 0; z-index: 100; background: var(--header); color: #fff;
+    flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 30px;
+    font-family: var(--font-display);
+  }
+  .rotate .phone { font-size: 3rem; display: inline-block; animation: turn 2.2s ease-in-out infinite; }
+  @keyframes turn { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+  .rotate p { margin: 0; font-size: 1.2rem; font-weight: 700; }
+  @media (orientation: portrait) and (max-width: 900px) { .rotate { display: flex; } }
+
+  /* Short landscape phones: tighten the modal */
+  @media (max-height: 420px) {
+    .sheet { height: 100%; }
+    .sheet-head { padding-top: 4px; padding-bottom: 4px; }
+    .close { width: 34px; height: 34px; }
+    .list .item { padding: 8px 10px; }
+    .remove { width: 38px; height: 38px; }
+    .edit-btn { width: 34px; height: 34px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sheet, .rotate .phone { animation: none; }
+    .tile, .toast { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Grocery Map</h1>
+    <div class="hright"><span class="sync" id="sync"></span><span class="total" id="total"></span></div>
+  </header>
+  <main class="map" id="map"></main>
+</div>
+
+<div class="backdrop" id="backdrop">
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head" id="sheetHead">
+      <h2 id="sheetTitle"></h2>
+      <button class="close" id="closeBtn" aria-label="Close">✕</button>
+    </div>
+    <section class="pane">
+      <h3 class="pane-title"><span id="listTitle">On the list</span><button class="clear-btn" id="clearBtn">Clear checked</button></h3>
+      <ul class="list" id="list"></ul>
+    </section>
+    <section class="pane" id="addPane">
+      <h3 class="pane-title">Add an item</h3>
+      <div class="add-row">
+        <input id="newItem" type="text" placeholder="Type anything…" enterkeyhint="done" autocomplete="off" autocapitalize="sentences">
+        <button id="addBtn">Add</button>
+      </div>
+      <div class="chips" id="chips"></div>
+    </section>
+    <section class="pane" id="detailPane" hidden>
+      <h3 class="pane-title"><span id="detailTitle"></span><button class="clear-btn" id="noteCancel">Cancel</button></h3>
+      <div class="add-row">
+        <input id="noteInput" type="text" placeholder="Add details…" enterkeyhint="done" autocomplete="off" autocapitalize="sentences">
+        <button id="noteDone">Done</button>
+      </div>
+      <div class="chips" id="noteChips"></div>
+    </section>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span><button id="undoBtn">Undo</button></div>
+
+<div class="rotate"><div class="phone">📱</div><p>Turn your phone sideways</p></div>
+
+<script type="module">
+/* =====================================================================
+   STORE AREAS — edit this block to change layout, colors, and quick-add items.
+   grid = "row-start / col-start / row-end / col-end" on a 6-column, 3-row grid.
+   ===================================================================== */
+/* Custom icon: bag of frozen vegetables (there is no emoji for it) */
+const FROZEN_BAG = `<svg viewBox="0 0 64 64" width="1em" height="1em" aria-hidden="true">
+  <path d="M13 12H51L54 55Q54.3 59 50 59H14Q9.7 59 10 55Z" fill="#4a9bd8"/>
+  <path d="M12 8H52V16H12Z" fill="#2f7fc0"/>
+  <path d="M12 12H52" stroke="#5aa8e0" stroke-width="8" stroke-dasharray="1.6 2.4"/>
+  <rect x="17" y="21" width="30" height="27" rx="6" fill="#fff"/>
+  <circle cx="26" cy="33" r="5" fill="#3fa34d"/><circle cx="32" cy="30" r="6" fill="#4cb85a"/><circle cx="38" cy="33" r="5" fill="#3fa34d"/>
+  <rect x="29.5" y="35" width="5" height="9" rx="1.5" fill="#7cc36b"/>
+  <g stroke="#fff" stroke-width="1.8" stroke-linecap="round" transform="translate(32 54)">
+    <line x1="0" y1="-3.6" x2="0" y2="3.6"/><line x1="-3.1" y1="-1.8" x2="3.1" y2="1.8"/><line x1="-3.1" y1="1.8" x2="3.1" y2="-1.8"/>
+  </g>
+</svg>`;
+
+const AREAS = [
+  { id: "meat",    label: "Meat",        icon: "🥩", color: "#f28b82", grid: "1 / 2 / 2 / 6",
+    presets: ["Chicken","Ground beef","Bacon","Pork chops","Pork loin","Steak","Hot dogs","Hamburgers"] },
+  { id: "deli",    label: "Deli",        icon: "🥪", color: "#fdc99b", grid: "1 / 1 / 3 / 2",
+    presets: ["Sliced turkey","Sliced ham","Pepperoni","Bread","Buns","Bagels","Donuts","Sushi","Queso","Sub rolls"] },
+  { id: "cold",    label: "Cold Stuff",  icon: "🥛", color: "#a9d0f5", grid: "1 / 6 / 3 / 7",
+    presets: ["Milk","Eggs","Butter","Shredded cheese","Cheese sticks","Sliced cheese","Yogurt","Cream cheese","Orange juice","Cinnamon rolls"] },
+  { id: "frozen",  label: "Frozen",      icon: FROZEN_BAG, color: "#b9e7ee", grid: "2 / 2 / 3 / 3",
+    presets: ["Ice cream","Frozen pizza","Frozen vegetables","Frozen fruit","Waffles","Pancakes","Chicken nuggets","French fries","Meatballs"] },
+  { id: "aisle3",  label: "3", icon: "🧃", title: "3: Drinks", aisle: true, color: "#aab4f5", grid: "2 / 3 / 3 / 4",
+    presets: ["Coke zero","Fake soda","Ginger ale","Apple juice","Juice boxes","Drink packs"] },
+  { id: "aisle2",  label: "2", icon: "🧴", title: "2: Medicine & bathroom", aisle: true, color: "#fbe38e", grid: "2 / 4 / 3 / 5",
+    presets: ["Body wash","Hand soap","Shampoo","Conditioner","Toothpaste","Mouthwash","Deodorant","Vitamins","Toilet paper","Paper towels","Tissues","Pull-ups","Bed pads","Dishwasher detergent","Laundry detergent","Fabric softener","Dryer sheets","Clorox wipes"] },
+  { id: "aisle1",  label: "1", icon: "🥫", title: "1: Canned goods & baking", aisle: true, color: "#96dccb", grid: "2 / 5 / 3 / 6",
+    presets: ["Baked beans","Corn","Green beans","Tuna","Canned chicken","Soup","Pasta","Sauce","Rice","Flour","Sugar","Oil","Tortillas","Ranch","Salsa","Chips","Crackers","Olives","Pickles","Cereal","Velveeta"] },
+  { id: "beer",    label: "Beer / Wine", icon: "🍷", color: "#c98fb0", grid: "3 / 1 / 4 / 3",
+    presets: ["Beer","Wine","Non-alcoholic beer"] },
+  { id: "produce", label: "Produce",     icon: "🥬", color: "#c9e68f", grid: "3 / 5 / 4 / 7",
+    presets: ["Bananas","Apples","Oranges","Avocados","Grapes","Strawberries","Blueberries","Tomatoes","Onions","Potatoes","Carrots","Lettuce","Spinach","Cucumbers","Broccoli"] },
+];
+
+/* Suggested details for specific items (shown when you tap the pencil on a list row).
+   Key is the item name in lowercase. Anything not listed here still lets you type a note. */
+const VARIANTS = {
+  "sliced cheese":   ["American","Cheddar","Swiss","Provolone","Pepper jack","Colby jack"],
+  "milk":            ["Whole","2%","Skim","Almond","Oat"],
+  "eggs":            ["Large","Extra large","18 count","Egg whites"],
+  "ground beef":     ["80/20","85/15","90/10"],
+  "yogurt":          ["Sticks","Cups"],
+  "shredded cheese": ["Cheddar","Mozzarella","Mexican blend","Colby jack","Parmesan"],
+  "frozen fruit":    ["Mango","Strawberries","Blueberries"],
+  "buns":            ["Hot dog","Hamburger"],
+  "sauce":           ["Pasta sauce","Pizza sauce","Alfredo"],
+  "oil":             ["Vegetable oil","Olive oil"],
+  "wine":            ["Red","White"],
+  "pasta":           ["Elbow noodles","Egg noodles","Spaghetti","Lasagna noodles","Penne","Rotini","Shells"],
+};
+
+/* =====================================================================
+   FIREBASE SETTINGS
+   Paste your config from Firebase console > Project settings > Your apps.
+   Until the apiKey is filled in, the app runs in local-only mode on this device.
+   LIST_ID is the private "folder" your list lives in. It must match firestore.rules.
+   ===================================================================== */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBiwYT_sUpblM_xFkSNrkCxdWpDQ_UOw6o",
+  authDomain: "groceries-232c1.firebaseapp.com",
+  projectId: "groceries-232c1",
+  storageBucket: "groceries-232c1.firebasestorage.app",
+  messagingSenderId: "949900393616",
+  appId: "1:949900393616:web:956db8be351c63343c2c15"
+};
+const LIST_ID = "e03271e707a1b0015ce7da90";
+const CLOUD_ON = !FIREBASE_CONFIG.apiKey.startsWith("PASTE");
+
+/* ---------- Shared state (kept up to date by the backend) ---------- */
+let items = [];
+let custom = {};
+const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+const allPresets = area => area.presets.concat(custom[area.id] || []);
+const isDefault = (area, name) => allPresets(area).some(n => same(n, name));
+
+/* Make typed items match the defaults: "tortellini" -> "Tortellini" */
+function tidy(name) {
+  name = name.trim().replace(/\s+/g, " ");
+  if (!name) return "";
+  if (name.length > 4 && name === name.toUpperCase()) name = name.toLowerCase();
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* =====================================================================
+   BACKENDS — both expose the same methods, so the rest of the app doesn't care
+   which one is running.
+   ===================================================================== */
+
+/* Local-only: saves in this browser (used until Firebase is configured, or if it can't load) */
+function localBackend() {
+  const K = "grocery-map-v1", CK = "grocery-map-custom-v1";
+  const rd = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } };
+  let it = rd(K, []), cu = rd(CK, {});
+  let onItems = () => {}, onCustom = () => {};
+  const emit = () => {
+    try { localStorage.setItem(K, JSON.stringify(it)); localStorage.setItem(CK, JSON.stringify(cu)); } catch (e) {}
+    onItems(it.map(x => ({ ...x })));
+    onCustom(JSON.parse(JSON.stringify(cu)));
+  };
+  return {
+    start(i, c, status) { onItems = i; onCustom = c; emit(); status("local"); },
+    putItem(x) { const n = it.findIndex(y => y.id === x.id); if (n >= 0) it[n] = { ...x }; else it.push({ ...x }); emit(); },
+    patchItem(id, p) { const x = it.find(y => y.id === id); if (x) { Object.assign(x, p); emit(); } },
+    delItems(list) { const ids = new Set(list.map(x => x.id)); it = it.filter(x => !ids.has(x.id)); emit(); },
+    addCustom(a, n) { cu[a] = (cu[a] || []).filter(v => !same(v, n)).concat(n); emit(); },
+    dropCustom(a, n) { cu[a] = (cu[a] || []).filter(v => !same(v, n)); emit(); },
+  };
+}
+
+/* Cloud: Firestore, with offline support. Loaded on demand so local mode needs no network. */
+async function cloudBackend() {
+  const base = "https://www.gstatic.com/firebasejs/10.14.1/";
+  const { initializeApp } = await import(base + "firebase-app.js");
+  const fs = await import(base + "firebase-firestore.js");
+  const app = initializeApp(FIREBASE_CONFIG);
+  const db = fs.initializeFirestore(app, {
+    localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
+  });
+  const itemsCol = fs.collection(db, "lists", LIST_ID, "items");
+  const customRef = fs.doc(db, "lists", LIST_ID, "meta", "custom");
+  const warn = e => console.warn("Sync problem:", e);
+  return {
+    start(onItems, onCustom, status) {
+      const report = snap => {
+        if (snap.metadata.hasPendingWrites) status(navigator.onLine ? "saving" : "offline");
+        else if (snap.metadata.fromCache) status(navigator.onLine ? "connecting" : "offline");
+        else status("synced");
+      };
+      fs.onSnapshot(itemsCol, { includeMetadataChanges: true }, snap => {
+        onItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        report(snap);
+      }, e => { warn(e); status("error"); });
+      fs.onSnapshot(customRef, snap => onCustom(snap.exists() ? snap.data() : {}), warn);
+    },
+    putItem(x) { const { id, ...rest } = x; fs.setDoc(fs.doc(itemsCol, id), rest).catch(warn); },
+    patchItem(id, p) { fs.updateDoc(fs.doc(itemsCol, id), p).catch(warn); },
+    delItems(list) {
+      const batch = fs.writeBatch(db);
+      list.forEach(x => batch.delete(fs.doc(itemsCol, x.id)));
+      batch.commit().catch(warn);
+    },
+    addCustom(a, n) { fs.setDoc(customRef, { [a]: fs.arrayUnion(n) }, { merge: true }).catch(warn); },
+    dropCustom(a, n) { fs.setDoc(customRef, { [a]: fs.arrayRemove(n) }, { merge: true }).catch(warn); },
+  };
+}
+
+let backend;
+try {
+  backend = CLOUD_ON ? await cloudBackend() : localBackend();
+} catch (e) {
+  console.warn("Cloud sync unavailable, using local storage", e);
+  backend = localBackend();
+}
+
+/* ---------- Actions ---------- */
+let undoFn = null;
+function remember(msg, undo) { undoFn = undo; showToast(msg); }
+
+function addItem(areaId, name) {
+  name = tidy(name);
+  if (!name) return false;
+  const existing = items.find(i => i.area === areaId && same(i.name, name));
+  if (existing) {
+    if (existing.checked) backend.patchItem(existing.id, { checked: false });
+    return false;
+  }
+  backend.putItem({ id: uid(), area: areaId, name, checked: false, ts: Date.now() });
+  return true;
+}
+function toggleItem(id) {
+  const it = items.find(i => i.id === id);
+  if (it) backend.patchItem(id, { checked: !it.checked });
+}
+function removeItem(id) {
+  const it = items.find(i => i.id === id);
+  if (!it) return;
+  remember(`Removed ${it.name}`, () => backend.putItem(it));
+  backend.delItems([it]);
+}
+function saveDefault(areaId, id) {
+  const it = items.find(i => i.id === id);
+  const area = AREAS.find(a => a.id === areaId);
+  if (!it || isDefault(area, it.name)) return;
+  const name = it.name;
+  remember(`Saved ${name} to quick-add`, () => backend.dropCustom(areaId, name));
+  backend.addCustom(areaId, name);
+}
+function removeCustom(areaId, name) {
+  remember(`Removed ${name} from quick-add`, () => backend.addCustom(areaId, name));
+  backend.dropCustom(areaId, name);
+}
+function clearChecked(areaId) {
+  const list = items.filter(i => i.area === areaId && i.checked);
+  if (!list.length) return;
+  remember(`Cleared ${list.length} item${list.length > 1 ? "s" : ""}`, () => list.forEach(x => backend.putItem(x)));
+  backend.delItems(list);
+}
+
+/* ---------- Map ---------- */
+const mapEl = document.getElementById("map");
+const tiles = {};
+AREAS.forEach(a => {
+  const b = document.createElement("button");
+  b.className = "tile" + (a.aisle ? " aisle" : "") + (a.thin ? " thin" : "") + (a.dark ? " dark-text" : "");
+  b.style.setProperty("--c", a.color);
+  b.style.gridArea = a.grid;
+  b.setAttribute("aria-label", a.label + (a.aisle ? " aisle" : ""));
+  b.innerHTML = (a.icon ? `<span class="icon">${a.icon}</span>` : "") +
+    `<span class="label">${a.aisle ? "" : ""}${a.label}</span>` +
+    (a.sub ? `<span class="sub">${a.sub}</span>` : "") +
+    `<span class="badge"></span>`;
+  b.addEventListener("click", () => openArea(a.id));
+  mapEl.appendChild(b);
+  tiles[a.id] = b;
+});
+function renderMap() {
+  let open = 0;
+  AREAS.forEach(a => {
+    const n = items.filter(i => i.area === a.id && !i.checked).length;
+    open += n;
+    tiles[a.id].classList.toggle("has-items", n > 0);
+    tiles[a.id].querySelector(".badge").textContent = n;
+  });
+  document.getElementById("total").textContent = open ? `${open} to get` : "List is empty";
+}
+
+/* ---------- Modal ---------- */
+const $ = id => document.getElementById(id);
+let current = null;
+let editingId = null;
+
+const variantsFor = it => VARIANTS[it.name.toLowerCase()] || [];
+const noteTokens = () => $("noteInput").value.split(",").map(t => t.trim()).filter(Boolean);
+
+function renderNoteChips() {
+  const it = items.find(i => i.id === editingId);
+  if (!it) return;
+  $("detailTitle").textContent = it.name;
+  const box = $("noteChips");
+  box.innerHTML = "";
+  const toks = noteTokens().map(t => t.toLowerCase());
+  variantsFor(it).forEach(v => {
+    const c = document.createElement("button");
+    c.className = "chip" + (toks.includes(v.toLowerCase()) ? " on" : "");
+    c.textContent = v;
+    c.addEventListener("click", () => toggleToken(v));
+    box.appendChild(c);
+  });
+  if (!box.children.length) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = "No suggestions for this one. Type what you need, like a brand or size.";
+    box.appendChild(p);
+  }
+}
+function toggleToken(v) {
+  const toks = noteTokens();
+  const i = toks.findIndex(t => same(t, v));
+  if (i >= 0) toks.splice(i, 1); else toks.push(v);
+  $("noteInput").value = toks.join(", ");
+  renderNoteChips();
+}
+function startEdit(id) {
+  const it = items.find(i => i.id === id);
+  if (!it) return;
+  editingId = id;
+  $("noteInput").value = it.note || "";
+  renderModal();
+  if (!variantsFor(it).length) $("noteInput").focus();
+}
+function finishEdit(commit) {
+  if (commit) {
+    const it = items.find(i => i.id === editingId);
+    if (it) backend.patchItem(it.id, { note: tidy($("noteInput").value.replace(/\s*,\s*/g, ", ")) });
+  }
+  editingId = null;
+  refresh();
+}
+
+function openArea(id) {
+  current = AREAS.find(a => a.id === id);
+  editingId = null;
+  const label = current.title || current.label;
+  $("sheetTitle").textContent = label;
+  $("sheet").style.setProperty("--c", current.color);
+  $("sheetHead").classList.toggle("dark-text", !!current.dark);
+  $("addBtn").classList.toggle("dark-text", !!current.dark);
+  $("newItem").value = "";
+  $("backdrop").classList.add("open");
+  renderModal();
+}
+function closeModal() {
+  $("backdrop").classList.remove("open");
+  current = null;
+  editingId = null;
+  document.activeElement && document.activeElement.blur();
+}
+
+function renderModal() {
+  if (!current) return;
+  if (editingId && !items.some(i => i.id === editingId)) editingId = null;
+  $("addPane").hidden = !!editingId;
+  $("detailPane").hidden = !editingId;
+  if (editingId) renderNoteChips();
+  const mine = items.filter(i => i.area === current.id)
+    .sort((a, b) => a.checked - b.checked || a.ts - b.ts);
+
+  const list = $("list");
+  list.innerHTML = "";
+  if (!mine.length) {
+    const e = document.createElement("li");
+    e.className = "empty"; e.style.background = "none";
+    e.textContent = "Nothing here yet. Add something on the right.";
+    list.appendChild(e);
+  }
+  mine.forEach(it => {
+    const li = document.createElement("li");
+    li.className = (it.checked ? "done" : "") + (it.id === editingId ? " editing" : "");
+    const main = document.createElement("button");
+    main.className = "item";
+    main.innerHTML = `<span class="box">${it.checked ? "✓" : ""}</span><span class="txt"><span class="name"></span><span class="note"></span></span>`;
+    main.querySelector(".name").textContent = it.name;
+    const noteEl = main.querySelector(".note");
+    noteEl.textContent = it.note || "";
+    if (!it.note) noteEl.remove();
+    main.addEventListener("click", () => toggleItem(it.id));
+    const rm = document.createElement("button");
+    rm.className = "remove"; rm.textContent = "✕";
+    rm.setAttribute("aria-label", "Remove " + it.name);
+    rm.addEventListener("click", () => removeItem(it.id));
+    li.append(main);
+    const ed = document.createElement("button");
+    ed.className = "edit-btn" + (it.note ? " has-note" : (variantsFor(it).length ? " hint" : ""));
+    ed.textContent = "✎";
+    ed.title = "Add details";
+    ed.setAttribute("aria-label", "Add details to " + it.name);
+    ed.addEventListener("click", () => startEdit(it.id));
+    li.append(ed);
+    if (!isDefault(current, it.name)) {
+      const sd = document.createElement("button");
+      sd.className = "save-def"; sd.textContent = "+ Default";
+      sd.title = "Add to this section's quick-add list";
+      sd.setAttribute("aria-label", "Save " + it.name + " as a default quick-add");
+      sd.addEventListener("click", () => saveDefault(current.id, it.id));
+      li.append(sd);
+    }
+    li.append(rm);
+    list.appendChild(li);
+  });
+  $("clearBtn").disabled = !mine.some(i => i.checked);
+  if (scrollToEnd) { list.scrollTop = list.scrollHeight; scrollToEnd = false; }
+
+  const chips = $("chips");
+  chips.innerHTML = "";
+  const mineCustom = custom[current.id] || [];
+  allPresets(current).forEach(name => {
+    const isCustom = mineCustom.some(n => same(n, name)) && !current.presets.some(n => same(n, name));
+    const found = mine.find(i => same(i.name, name));
+    const c = document.createElement("button");
+    c.className = "chip" + (found && !found.checked ? " on" : "") + (isCustom ? " custom" : "");
+    c.appendChild(document.createTextNode(name));
+    if (isCustom) {
+      const x = document.createElement("span");
+      x.className = "x"; x.textContent = "✕";
+      x.setAttribute("aria-label", "Remove " + name + " from quick-add");
+      c.appendChild(x);
+    }
+    c.addEventListener("click", e => {
+      if (e.target.classList && e.target.classList.contains("x")) removeCustom(current.id, name);
+      else addItem(current.id, name);
+    });
+    chips.appendChild(c);
+  });
+}
+
+function refresh() { renderMap(); renderModal(); }
+
+let scrollToEnd = false;
+
+function submitFreeform() {
+  const input = $("newItem");
+  if (addItem(current.id, input.value)) {
+    input.value = "";
+    scrollToEnd = true;
+  } else if (input.value.trim()) {
+    input.value = "";
+  }
+  input.focus();
+}
+$("addBtn").addEventListener("click", submitFreeform);
+$("newItem").addEventListener("keydown", e => { if (e.key === "Enter") submitFreeform(); });
+$("noteDone").addEventListener("click", () => finishEdit(true));
+$("noteCancel").addEventListener("click", () => finishEdit(false));
+$("noteInput").addEventListener("keydown", e => { if (e.key === "Enter") finishEdit(true); });
+$("noteInput").addEventListener("input", renderNoteChips);
+$("clearBtn").addEventListener("click", () => clearChecked(current.id));
+$("closeBtn").addEventListener("click", closeModal);
+$("backdrop").addEventListener("click", e => { if (e.target === $("backdrop")) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && current) closeModal(); });
+
+/* ---------- Undo toast ---------- */
+let toastTimer;
+function showToast(msg) {
+  $("toastMsg").textContent = msg;
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("show"), 5000);
+}
+$("undoBtn").addEventListener("click", () => {
+  if (undoFn) { undoFn(); undoFn = null; }
+  $("toast").classList.remove("show");
+});
+
+
+/* ---------- Sync status ---------- */
+let lastStatus = "local";
+function setStatus(st) {
+  lastStatus = st;
+  const text = { synced: "Synced", saving: "Saving…", connecting: "Connecting…", offline: "Offline", error: "Sync error", local: "This device only" };
+  $("sync").textContent = text[st] || "";
+  $("sync").dataset.s = st;
+}
+window.addEventListener("online", () => setStatus(lastStatus === "offline" ? "connecting" : lastStatus));
+window.addEventListener("offline", () => setStatus("offline"));
+
+/* ---------- Go ---------- */
+backend.start(
+  list => { items = list; refresh(); },
+  c => { custom = c || {}; refresh(); },
+  setStatus
+);
+
+/* Offline support + install (only works when served over https, e.g. GitHub Pages) */
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>

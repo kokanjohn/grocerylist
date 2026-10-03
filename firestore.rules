@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the one private list is readable/writable. Everything else is locked.
+    match /lists/e03271e707a1b0015ce7da90/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
