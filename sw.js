@@ -1,10 +1,10 @@
-/* Caches the app so it opens with no signal. Bump CACHE (v1 -> v2) to force everyone to pick up a new version. */
-const CACHE = "grocery-map-v1";
+/* Caches the app so it opens with no signal. Bump CACHE (v2 -> v3) to force everyone to pick up a new version. */
+const CACHE = "grocery-map-v2";
 const SHELL = ["./", "index.html", "manifest.json", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 const HOSTS = ["www.gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com"];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
+  e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))));
   self.skipWaiting();
 });
 

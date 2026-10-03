@@ -2,6 +2,7 @@
   "name": "Grocery Map",
   "short_name": "Groceries",
   "description": "Shared grocery list organized by store layout",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
