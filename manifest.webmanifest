@@ -1,12 +1,12 @@
 {
   "id": "grocery-map",
-  "name": "Grocery Map",
-  "short_name": "Groceries",
+  "name": "Grocery List",
+  "short_name": "Grocery List",
   "description": "Shared grocery list organized by store layout",
   "start_url": "./",
   "scope": "./",
-  "display": "standalone",
-  "orientation": "landscape",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "background_color": "#000000",
   "theme_color": "#2f3e46",
   "icons": [

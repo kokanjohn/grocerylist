@@ -9,9 +9,9 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Groceries">
+<meta name="apple-mobile-web-app-title" content="Grocery List">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<title>Grocery Map</title>
+<title>Grocery List</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Figtree:wght@400;600;700&display=swap" rel="stylesheet">
@@ -176,6 +176,16 @@
     font: inherit; font-size: .75rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; cursor: pointer;
   }
   .chip .x { margin-left: 8px; padding: 0 2px; font-size: .75rem; opacity: .55; }
+  .def-hint { margin: -2px 0 8px; font-size: .75rem; color: var(--ink-soft); }
+  .deflist { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+  .deflist li { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; border-radius: 12px;
+    background: color-mix(in srgb, var(--c) 12%, var(--paper)); }
+  .deflist li.dragging { background: color-mix(in srgb, var(--c) 35%, var(--paper)); box-shadow: 0 6px 16px rgba(0,0,0,.35); position: relative; z-index: 2; }
+  .grip { flex: none; width: 42px; height: 44px; border: 0; background: none; color: var(--ink-soft); font-size: 1.4rem;
+    cursor: grab; touch-action: none; display: grid; place-items: center; }
+  .defname { flex: 1; min-width: 0; font: inherit; font-size: 1rem; font-weight: 600; padding: 9px 6px; border: 0;
+    border-radius: 8px; background: transparent; color: var(--ink); }
+  .defname:focus { outline: 2px solid color-mix(in srgb, var(--c) 70%, #4a4a58); background: var(--paper); }
   .empty { color: var(--ink-soft); font-size: .95rem; padding: 14px 4px; }
 
   .add-row { display: flex; gap: 8px; margin-bottom: 10px; }
@@ -241,12 +251,20 @@
     .sheet, .rotate .phone { animation: none; }
     .tile, .toast { transition: none; }
   }
+
+  /* ---------- Portrait: the open list goes on top, the add options below ---------- */
+  @media (orientation: portrait) {
+    .sheet { width: min(560px, 100%); height: 100%; grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1.3fr) minmax(0, 1fr); }
+    .pane + .pane { border-left: 0; border-top: 1px solid var(--shelf); }
+  }
+  /* The "turn sideways" screen only covers the store map, never an open list */
+  body.modal-open .rotate { display: none; }
 </style>
 </head>
 <body>
 <div class="app">
   <header>
-    <h1>Grocery Map</h1>
+    <h1>Grocery List</h1>
     <div class="hright"><span class="sync" id="sync"></span><span class="total" id="total"></span></div>
   </header>
   <main class="map" id="map"></main>
@@ -263,12 +281,21 @@
       <ul class="list" id="list"></ul>
     </section>
     <section class="pane" id="addPane">
-      <h3 class="pane-title">Add an item</h3>
+      <h3 class="pane-title"><span>Add an item</span><button class="clear-btn" id="editDefBtn">Edit defaults</button></h3>
       <div class="add-row">
         <input id="newItem" type="text" placeholder="Type anything…" enterkeyhint="done" autocomplete="off" autocapitalize="sentences">
         <button id="addBtn">Add</button>
       </div>
       <div class="chips" id="chips"></div>
+    </section>
+    <section class="pane" id="defPane" hidden>
+      <h3 class="pane-title"><span>Edit defaults</span><button class="clear-btn" id="defDone">Done</button></h3>
+      <div class="add-row">
+        <input id="defNew" type="text" placeholder="New default…" enterkeyhint="done" autocomplete="off" autocapitalize="sentences">
+        <button id="defAdd">Add</button>
+      </div>
+      <p class="def-hint">Drag ≡ to reorder. Tap a name to rename.</p>
+      <ul class="deflist" id="defList"></ul>
     </section>
     <section class="pane" id="detailPane" hidden>
       <h3 class="pane-title"><span id="detailTitle"></span><button class="clear-btn" id="noteCancel">Cancel</button></h3>
@@ -350,7 +377,7 @@ const VARIANTS = {
   "sliced cheese":   ["American","Cheddar","Swiss","Provolone","Pepper jack","Colby jack"],
   "milk":            ["Whole","2%","Skim","Almond","Oat"],
   "eggs":            ["Large","Extra large","18 count","Egg whites"],
-  "ground beef":     ["80/20","85/15","90/10"],
+  "ground beef":     ["1 lb","2 lb"],
   "yogurt":          ["Sticks","Cups"],
   "shredded cheese": ["Cheddar","Mozzarella","Mexican blend","Colby jack","Parmesan"],
   "frozen fruit":    ["Mango","Strawberries","Blueberries"],
@@ -380,10 +407,17 @@ const CLOUD_ON = !FIREBASE_CONFIG.apiKey.startsWith("PASTE");
 
 /* ---------- Shared state (kept up to date by the backend) ---------- */
 let items = [];
-let custom = {};
+let custom = {};   // older "saved quick-adds" (read only; folded into the defaults below)
+let presets = {};  // your edited defaults, per area: { areaId: ["Name", ...] }
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
-const allPresets = area => area.presets.concat(custom[area.id] || []);
-const isDefault = (area, name) => allPresets(area).some(n => same(n, name));
+/* The defaults for an area: your edited list if there is one, otherwise the starting list in AREAS (+ any older saved quick-adds). */
+function defaultsFor(area) {
+  if (Array.isArray(presets[area.id])) return presets[area.id];
+  const out = [];
+  area.presets.concat(custom[area.id] || []).forEach(n => { if (!out.some(o => same(o, n))) out.push(n); });
+  return out;
+}
+const isDefault = (area, name) => defaultsFor(area).some(n => same(n, name));
 
 /* Make typed items match the defaults: "tortellini" -> "Tortellini" */
 function tidy(name) {
@@ -401,22 +435,22 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 /* Local-only: saves in this browser (used until Firebase is configured, or if it can't load) */
 function localBackend() {
-  const K = "grocery-map-v1", CK = "grocery-map-custom-v1";
+  const K = "grocery-map-v1", CK = "grocery-map-custom-v1", PK = "grocery-map-presets-v1";
   const rd = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } };
-  let it = rd(K, []), cu = rd(CK, {});
-  let onItems = () => {}, onCustom = () => {};
+  let it = rd(K, []), cu = rd(CK, {}), pr = rd(PK, {});
+  let onItems = () => {}, onCustom = () => {}, onPresets = () => {};
   const emit = () => {
-    try { localStorage.setItem(K, JSON.stringify(it)); localStorage.setItem(CK, JSON.stringify(cu)); } catch (e) {}
+    try { localStorage.setItem(K, JSON.stringify(it)); localStorage.setItem(PK, JSON.stringify(pr)); } catch (e) {}
     onItems(it.map(x => ({ ...x })));
     onCustom(JSON.parse(JSON.stringify(cu)));
+    onPresets(JSON.parse(JSON.stringify(pr)));
   };
   return {
-    start(i, c, status) { onItems = i; onCustom = c; emit(); status("local"); },
+    start(i, c, p, status) { onItems = i; onCustom = c; onPresets = p; emit(); status("local"); },
     putItem(x) { const n = it.findIndex(y => y.id === x.id); if (n >= 0) it[n] = { ...x }; else it.push({ ...x }); emit(); },
     patchItem(id, p) { const x = it.find(y => y.id === id); if (x) { Object.assign(x, p); emit(); } },
     delItems(list) { const ids = new Set(list.map(x => x.id)); it = it.filter(x => !ids.has(x.id)); emit(); },
-    addCustom(a, n) { cu[a] = (cu[a] || []).filter(v => !same(v, n)).concat(n); emit(); },
-    dropCustom(a, n) { cu[a] = (cu[a] || []).filter(v => !same(v, n)); emit(); },
+    setPresets(a, arr) { pr[a] = arr.slice(); emit(); },
   };
 }
 
@@ -431,9 +465,10 @@ async function cloudBackend() {
   });
   const itemsCol = fs.collection(db, "lists", LIST_ID, "items");
   const customRef = fs.doc(db, "lists", LIST_ID, "meta", "custom");
+  const presetsRef = fs.doc(db, "lists", LIST_ID, "meta", "presets");
   const warn = e => console.warn("Sync problem:", e);
   return {
-    start(onItems, onCustom, status) {
+    start(onItems, onCustom, onPresets, status) {
       const report = snap => {
         if (snap.metadata.hasPendingWrites) status(navigator.onLine ? "saving" : "offline");
         else if (snap.metadata.fromCache) status(navigator.onLine ? "connecting" : "offline");
@@ -444,6 +479,7 @@ async function cloudBackend() {
         report(snap);
       }, e => { warn(e); status("error"); });
       fs.onSnapshot(customRef, snap => onCustom(snap.exists() ? snap.data() : {}), warn);
+      fs.onSnapshot(presetsRef, snap => onPresets(snap.exists() ? snap.data() : {}), warn);
     },
     putItem(x) { const { id, ...rest } = x; fs.setDoc(fs.doc(itemsCol, id), rest).catch(warn); },
     patchItem(id, p) { fs.updateDoc(fs.doc(itemsCol, id), p).catch(warn); },
@@ -452,8 +488,7 @@ async function cloudBackend() {
       list.forEach(x => batch.delete(fs.doc(itemsCol, x.id)));
       batch.commit().catch(warn);
     },
-    addCustom(a, n) { fs.setDoc(customRef, { [a]: fs.arrayUnion(n) }, { merge: true }).catch(warn); },
-    dropCustom(a, n) { fs.setDoc(customRef, { [a]: fs.arrayRemove(n) }, { merge: true }).catch(warn); },
+    setPresets(a, arr) { fs.setDoc(presetsRef, { [a]: arr }, { merge: true }).catch(warn); },
   };
 }
 
@@ -467,7 +502,8 @@ try {
 
 /* ---------- Actions ---------- */
 let undoFn = null;
-function remember(msg, undo) { undoFn = undo; showToast(msg); }
+function remember(msg, undo) { undoFn = undo; showToast(msg, true); }
+function notice(msg) { undoFn = null; showToast(msg, false); }
 
 function addItem(areaId, name) {
   name = tidy(name);
@@ -490,17 +526,14 @@ function removeItem(id) {
   remember(`Removed ${it.name}`, () => backend.putItem(it));
   backend.delItems([it]);
 }
+function writePresets(areaId, arr) { backend.setPresets(areaId, arr); }
 function saveDefault(areaId, id) {
   const it = items.find(i => i.id === id);
   const area = AREAS.find(a => a.id === areaId);
   if (!it || isDefault(area, it.name)) return;
-  const name = it.name;
-  remember(`Saved ${name} to quick-add`, () => backend.dropCustom(areaId, name));
-  backend.addCustom(areaId, name);
-}
-function removeCustom(areaId, name) {
-  remember(`Removed ${name} from quick-add`, () => backend.addCustom(areaId, name));
-  backend.dropCustom(areaId, name);
+  const name = it.name, prev = defaultsFor(area).slice();
+  remember(`Saved ${name} to defaults`, () => writePresets(areaId, prev));
+  writePresets(areaId, prev.concat(name));
 }
 function clearChecked(areaId) {
   const list = items.filter(i => i.area === areaId && i.checked);
@@ -541,6 +574,7 @@ function renderMap() {
 const $ = id => document.getElementById(id);
 let current = null;
 let editingId = null;
+let editingDefaults = false;
 
 const variantsFor = it => VARIANTS[it.name.toLowerCase()] || [];
 const noteTokens = () => $("noteInput").value.split(",").map(t => t.trim()).filter(Boolean);
@@ -577,6 +611,7 @@ function startEdit(id) {
   const it = items.find(i => i.id === id);
   if (!it) return;
   editingId = id;
+  editingDefaults = false;
   $("noteInput").value = it.note || "";
   renderModal();
   if (!variantsFor(it).length) $("noteInput").focus();
@@ -593,6 +628,7 @@ function finishEdit(commit) {
 function openArea(id) {
   current = AREAS.find(a => a.id === id);
   editingId = null;
+  editingDefaults = false;
   const label = current.title || current.label;
   $("sheetTitle").textContent = label;
   $("sheet").style.setProperty("--c", current.color);
@@ -600,21 +636,26 @@ function openArea(id) {
   $("addBtn").classList.toggle("dark-text", !!current.dark);
   $("newItem").value = "";
   $("backdrop").classList.add("open");
+  document.body.classList.add("modal-open");
   renderModal();
 }
 function closeModal() {
   $("backdrop").classList.remove("open");
+  document.body.classList.remove("modal-open");
   current = null;
   editingId = null;
+  editingDefaults = false;
   document.activeElement && document.activeElement.blur();
 }
 
 function renderModal() {
   if (!current) return;
   if (editingId && !items.some(i => i.id === editingId)) editingId = null;
-  $("addPane").hidden = !!editingId;
+  $("addPane").hidden = !!editingId || editingDefaults;
   $("detailPane").hidden = !editingId;
+  $("defPane").hidden = !editingDefaults || !!editingId;
   if (editingId) renderNoteChips();
+  if (editingDefaults && !editingId) renderDefaults();
   const mine = items.filter(i => i.area === current.id)
     .sort((a, b) => a.checked - b.checked || a.ts - b.ts);
 
@@ -665,23 +706,12 @@ function renderModal() {
 
   const chips = $("chips");
   chips.innerHTML = "";
-  const mineCustom = custom[current.id] || [];
-  allPresets(current).forEach(name => {
-    const isCustom = mineCustom.some(n => same(n, name)) && !current.presets.some(n => same(n, name));
+  defaultsFor(current).forEach(name => {
     const found = mine.find(i => same(i.name, name));
     const c = document.createElement("button");
-    c.className = "chip" + (found && !found.checked ? " on" : "") + (isCustom ? " custom" : "");
-    c.appendChild(document.createTextNode(name));
-    if (isCustom) {
-      const x = document.createElement("span");
-      x.className = "x"; x.textContent = "✕";
-      x.setAttribute("aria-label", "Remove " + name + " from quick-add");
-      c.appendChild(x);
-    }
-    c.addEventListener("click", e => {
-      if (e.target.classList && e.target.classList.contains("x")) removeCustom(current.id, name);
-      else addItem(current.id, name);
-    });
+    c.className = "chip" + (found && !found.checked ? " on" : "");
+    c.textContent = name;
+    c.addEventListener("click", () => addItem(current.id, name));
     chips.appendChild(c);
   });
 }
@@ -711,10 +741,115 @@ $("closeBtn").addEventListener("click", closeModal);
 $("backdrop").addEventListener("click", e => { if (e.target === $("backdrop")) closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && current) closeModal(); });
 
+/* ---------- Edit defaults: reorder, rename, delete, add ---------- */
+let drag = null;
+const defRows = () => [...$("defList").children];
+const defNames = () => defRows().map(r => r.dataset.name);
+
+function makeDefRow(name) {
+  const li = document.createElement("li");
+  li.dataset.name = name;
+  const grip = document.createElement("button");
+  grip.className = "grip"; grip.textContent = "≡";
+  grip.setAttribute("aria-label", "Drag to reorder " + name);
+  grip.addEventListener("pointerdown", e => startDrag(e, li, grip));
+  const inp = document.createElement("input");
+  inp.className = "defname"; inp.value = name;
+  inp.setAttribute("enterkeyhint", "done"); inp.setAttribute("autocomplete", "off");
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") inp.blur(); });
+  inp.addEventListener("change", () => renameDef(li, inp));
+  const rm = document.createElement("button");
+  rm.className = "remove"; rm.textContent = "✕";
+  rm.setAttribute("aria-label", "Delete " + name);
+  rm.addEventListener("click", () => removeDef(li));
+  li.append(grip, inp, rm);
+  return li;
+}
+
+/* Rebuild the rows from the saved defaults (skipped while you're dragging or typing in a row) */
+function renderDefaults(force) {
+  if (drag) return;
+  const list = $("defList");
+  const a = document.activeElement;
+  if (!force && a && a.classList && a.classList.contains("defname") && list.contains(a)) return;
+  list.innerHTML = "";
+  defaultsFor(current).forEach(n => list.appendChild(makeDefRow(n)));
+}
+
+function renameDef(li, inp) {
+  const old = li.dataset.name, nn = tidy(inp.value);
+  if (!nn || nn === old) { inp.value = old; return; }
+  if (defNames().some(n => n !== old && same(n, nn))) { inp.value = old; notice(`${nn} is already a default`); return; }
+  const prev = defNames();
+  li.dataset.name = nn; inp.value = nn;
+  writePresets(current.id, defNames());
+  remember(`Renamed ${old}`, () => writePresets(current.id, prev));
+}
+function removeDef(li) {
+  const prev = defNames(), name = li.dataset.name;
+  li.remove();
+  writePresets(current.id, defNames());
+  remember(`Deleted ${name} from defaults`, () => writePresets(current.id, prev));
+}
+function addDef() {
+  const inp = $("defNew"), name = tidy(inp.value);
+  if (!name) return;
+  inp.value = "";
+  if (defNames().some(n => same(n, name))) { notice(`${name} is already a default`); inp.focus(); return; }
+  $("defList").appendChild(makeDefRow(name));
+  $("defList").scrollTop = $("defList").scrollHeight;
+  writePresets(current.id, defNames());
+  inp.focus();
+}
+
+/* Drag to reorder: hold the ≡ handle and move up or down. The list scrolls when you reach its edge. */
+function startDrag(e, li, grip) {
+  e.preventDefault();
+  const list = $("defList");
+  const before = defNames().join("\u0001");
+  drag = { lastY: e.clientY, raf: 0 };
+  li.classList.add("dragging");
+  grip.setPointerCapture(e.pointerId);
+  const place = y => {
+    const others = defRows().filter(r => r !== li);
+    const next = others.find(r => { const b = r.getBoundingClientRect(); return y < b.top + b.height / 2; });
+    if (next) { if (li.nextSibling !== next) list.insertBefore(li, next); }
+    else if (list.lastElementChild !== li) list.appendChild(li);
+  };
+  const tick = () => {
+    if (!drag) return;
+    const r = list.getBoundingClientRect();
+    if (drag.lastY < r.top + 40) list.scrollTop -= 8;
+    else if (drag.lastY > r.bottom - 40) list.scrollTop += 8;
+    place(drag.lastY);
+    drag.raf = requestAnimationFrame(tick);
+  };
+  const move = ev => { if (drag) drag.lastY = ev.clientY; };
+  const end = () => {
+    grip.removeEventListener("pointermove", move);
+    grip.removeEventListener("pointerup", end);
+    grip.removeEventListener("pointercancel", end);
+    if (drag) cancelAnimationFrame(drag.raf);
+    drag = null;
+    li.classList.remove("dragging");
+    if (defNames().join("\u0001") !== before) writePresets(current.id, defNames());
+  };
+  grip.addEventListener("pointermove", move);
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
+  tick();
+}
+
+$("editDefBtn").addEventListener("click", () => { editingDefaults = true; editingId = null; renderModal(); renderDefaults(true); });
+$("defDone").addEventListener("click", () => { editingDefaults = false; renderModal(); });
+$("defAdd").addEventListener("click", addDef);
+$("defNew").addEventListener("keydown", e => { if (e.key === "Enter") addDef(); });
+
 /* ---------- Undo toast ---------- */
 let toastTimer;
-function showToast(msg) {
+function showToast(msg, undoable = true) {
   $("toastMsg").textContent = msg;
+  $("undoBtn").hidden = !undoable;
   $("toast").classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $("toast").classList.remove("show"), 5000);
@@ -740,12 +875,21 @@ window.addEventListener("offline", () => setStatus("offline"));
 backend.start(
   list => { items = list; refresh(); },
   c => { custom = c || {}; refresh(); },
+  p => { presets = p || {}; refresh(); },
   setStatus
 );
 
 /* Offline support + install (only works when served over https, e.g. GitHub Pages) */
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").then(r => { swInfo.scope = r.scope; }).catch(e => { swInfo.err = String(e); });
+}
+
+/* Hide the phone's status bar. The manifest asks for fullscreen; if the app still opened as a normal
+   standalone window (e.g. before it was reinstalled), the first tap switches it to fullscreen. */
+if (matchMedia("(display-mode: standalone)").matches && document.documentElement.requestFullscreen) {
+  document.addEventListener("pointerup", () => {
+    document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
+  }, { once: true });
 }
 
 /* ---------- Install diagnostics ---------- */
@@ -847,7 +991,7 @@ $("diagCopy").addEventListener("click", () => {
   if (navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(() => {});
   else { const r = document.createRange(); r.selectNodeContents($("diagOut")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
 });
-/* Open with ?debug on the address, or tap the "Grocery Map" title 5 times */
+/* Open with ?debug on the address, or tap the "Grocery List" title 5 times */
 let titleTaps = 0, titleTimer;
 document.querySelector("header h1").addEventListener("click", () => {
   titleTaps++; clearTimeout(titleTimer); titleTimer = setTimeout(() => { titleTaps = 0; }, 1500);

@@ -1,10 +1,10 @@
-/* Grocery Map service worker.
+/* Grocery List service worker.
    - Our own pages/files: network first (updates show up right away), cache as the offline fallback.
    - Firebase/fonts from Google's CDNs: cache first (their URLs are versioned).
    - Only touches caches that start with "grocery-map-", so it never wipes other apps on the same domain.
-   Bump CACHE (v3 -> v4) to force old caches out on the next visit. */
+   Bump CACHE (v5 -> v6) to force old caches out on the next visit. */
 const PREFIX = "grocery-map-";
-const CACHE = PREFIX + "v3";
+const CACHE = PREFIX + "v5";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 const CDN = ["www.gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com"];
 
