@@ -208,6 +208,15 @@
   .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
   .toast button { border: 0; background: rgba(255,255,255,.2); color: #fff; font: inherit; font-weight: 700; padding: 7px 14px; border-radius: 999px; cursor: pointer; }
 
+  /* ---------- Diagnostics (open with ?debug, or tap the title 5 times) ---------- */
+  .diag { position: fixed; inset: 0; z-index: 300; background: #0b0f12; color: #d8e2e8; display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .diag[hidden] { display: none; }
+  .diag-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: #17212a; flex: none; flex-wrap: wrap; }
+  .diag-bar button { font: inherit; font-size: .8rem; font-weight: 700; padding: 7px 12px; border: 0; border-radius: 8px; background: #33505f; color: #fff; margin-left: 6px; cursor: pointer; }
+  .diag-bar button[hidden] { display: none; }
+  .diag pre { flex: 1; overflow: auto; margin: 0; padding: 10px 12px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+
   /* ---------- Landscape-only ---------- */
   .rotate {
     display: none; position: fixed; inset: 0; z-index: 100; background: var(--header); color: #fff;
@@ -274,9 +283,29 @@
 
 <div class="toast" id="toast"><span id="toastMsg"></span><button id="undoBtn">Undo</button></div>
 
+<div class="diag" id="diag" hidden>
+  <div class="diag-bar">
+    <strong>Install diagnostics</strong>
+    <span>
+      <button id="diagInstall" hidden>Install now</button>
+      <button id="diagRerun">Re-run</button>
+      <button id="diagCopy">Copy</button>
+      <button id="diagClose">Close</button>
+    </span>
+  </div>
+  <pre id="diagOut">Running checks…</pre>
+</div>
+
 <div class="rotate"><div class="phone">📱</div><p>Turn your phone sideways</p></div>
 
 <script type="module">
+/* Install signals. Registered first, before anything is awaited, so Chrome's event isn't missed. */
+let deferredPrompt = null, bipFired = false, installedEvent = false;
+const swInfo = {};
+function updateInstallBtn() { const b = document.getElementById("diagInstall"); if (b) b.hidden = !deferredPrompt; }
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferredPrompt = e; bipFired = true; updateInstallBtn(); });
+window.addEventListener("appinstalled", () => { installedEvent = true; });
+
 /* =====================================================================
    STORE AREAS — edit this block to change layout, colors, and quick-add items.
    grid = "row-start / col-start / row-end / col-end" on a 6-column, 3-row grid.
@@ -715,7 +744,116 @@ backend.start(
 );
 
 /* Offline support + install (only works when served over https, e.g. GitHub Pages) */
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then(r => { swInfo.scope = r.scope; }).catch(e => { swInfo.err = String(e); });
+}
+
+/* ---------- Install diagnostics ---------- */
+async function runDiag() {
+  const box = $("diagOut");
+  const lines = [];
+  const mark = ok => ok === true ? "[ OK ]" : ok === false ? "[FAIL]" : "[ .. ]";
+  const add = (ok, label, detail) => {
+    lines.push(`${mark(ok)} ${label}` + (detail ? `\n       ${detail}` : ""));
+    box.textContent = lines.join("\n") + "\n\n(running…)";
+  };
+  const safe = async (name, fn) => { try { await fn(); } catch (e) { add(false, name, "error: " + e); } };
+
+  add(null, "Checked at", new Date().toString());
+  add(null, "Page", location.href);
+  add(window.isSecureContext, "Secure context (https)");
+  add(null, "Browser", navigator.userAgent);
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  add(null, "Running as", standalone ? "installed app (standalone)" : "normal browser tab");
+
+  await safe("Manifest", async () => {
+    const link = document.querySelector('link[rel="manifest"]');
+    if (!link) { add(false, "Manifest link in page", "no <link rel=manifest> found"); return; }
+    const href = link.href;
+    add(null, "Manifest link", href);
+    const res = await fetch(href, { cache: "no-store" });
+    add(res.ok, "Manifest loads", `HTTP ${res.status}, ${res.headers.get("content-type")}`);
+    if (!res.ok) return;
+    const m = await res.json();
+    const base = new URL(href);
+    const start = new URL(m.start_url || ".", base);
+    const scope = new URL(m.scope || ".", start);
+    const id = m.id ? new URL(m.id, start.origin).href : start.href;
+    add(null, "Resolved id", id + (m.id ? "" : "   (no id set, so start_url is used)"));
+    add(null, "start_url", start.href);
+    add(null, "scope", scope.href);
+    add(start.href.startsWith(scope.href), "start_url is inside scope");
+    add(["standalone", "fullscreen", "minimal-ui"].includes(m.display), "display mode", String(m.display));
+    add(!!(m.name || m.short_name), "Has a name", `${m.name} / ${m.short_name}`);
+    add(null, "orientation", String(m.orientation));
+    let has192 = false, has512 = false;
+    for (const ic of (m.icons || [])) {
+      const src = new URL(ic.src, base).href;
+      const dim = await new Promise(r => {
+        const im = new Image();
+        im.onload = () => r(`${im.naturalWidth}x${im.naturalHeight}`);
+        im.onerror = () => r(null);
+        im.src = src;
+      });
+      add(!!dim, `Icon ${ic.sizes} (${ic.purpose || "any"})`, dim ? `loads, real size ${dim}` : `FAILED to load: ${src}`);
+      if (dim === "192x192") has192 = true;
+      if (dim === "512x512") has512 = true;
+    }
+    add(has192 && has512, "Has working 192px and 512px icons");
+  });
+
+  await safe("Service worker", async () => {
+    if (!("serviceWorker" in navigator)) { add(false, "Service workers supported"); return; }
+    if (swInfo.err) add(false, "Our sw.js registration", swInfo.err);
+    else add(!!swInfo.scope, "Our sw.js registration", swInfo.scope || "not finished yet, tap Re-run");
+    const swRes = await fetch("sw.js", { cache: "no-store" });
+    const swText = await swRes.text();
+    const ver = (swText.match(/const CACHE = [^\n;]+/) || ["(no version line found)"])[0];
+    add(swRes.ok, "sw.js loads", `HTTP ${swRes.status}; ${ver}`);
+    const regs = await navigator.serviceWorker.getRegistrations();
+    add(null, `Service workers on ${location.origin}`, regs.length ? "" : "none");
+    regs.forEach(r => {
+      const w = r.active || r.waiting || r.installing;
+      lines.push(`       - scope ${r.scope}\n         script ${w ? w.scriptURL : "?"}  state ${w ? w.state : "?"}`);
+    });
+    const c = navigator.serviceWorker.controller;
+    add(null, "This page is controlled by", c ? c.scriptURL : "no service worker yet (normal on the very first load)");
+    add(null, "Caches", (await caches.keys()).join(", ") || "none");
+  });
+
+  add(bipFired, "Chrome offered install (beforeinstallprompt)",
+    bipFired ? "yes: Chrome considers this app installable and NOT already installed. Tap Install now."
+             : "NO: wait about 10 seconds and tap Re-run. If still no, Chrome thinks it is already installed, or a check above failed.");
+  add(null, "appinstalled event this visit", installedEvent ? "yes" : "no");
+  await safe("Installed apps", async () => {
+    if (navigator.getInstalledRelatedApps) add(null, "getInstalledRelatedApps()", JSON.stringify(await navigator.getInstalledRelatedApps()));
+    else add(null, "getInstalledRelatedApps()", "not supported in this browser");
+  });
+  box.textContent = lines.join("\n");
+}
+function openDiag() { $("diag").hidden = false; updateInstallBtn(); runDiag(); }
+$("diagClose").addEventListener("click", () => { $("diag").hidden = true; });
+$("diagRerun").addEventListener("click", runDiag);
+$("diagInstall").addEventListener("click", async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const r = await deferredPrompt.userChoice;
+  deferredPrompt = null; updateInstallBtn();
+  $("diagOut").textContent += `\n\nInstall prompt result: ${r.outcome}`;
+});
+$("diagCopy").addEventListener("click", () => {
+  const btn = $("diagCopy"), text = $("diagOut").textContent;
+  const done = () => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy"; }, 1500); };
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(() => {});
+  else { const r = document.createRange(); r.selectNodeContents($("diagOut")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+});
+/* Open with ?debug on the address, or tap the "Grocery Map" title 5 times */
+let titleTaps = 0, titleTimer;
+document.querySelector("header h1").addEventListener("click", () => {
+  titleTaps++; clearTimeout(titleTimer); titleTimer = setTimeout(() => { titleTaps = 0; }, 1500);
+  if (titleTaps >= 5) { titleTaps = 0; openDiag(); }
+});
+if (/[?&]debug/.test(location.search)) openDiag();
 </script>
 </body>
 </html>
