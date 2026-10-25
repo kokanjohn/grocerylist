@@ -227,17 +227,6 @@
   .diag-bar button[hidden] { display: none; }
   .diag pre { flex: 1; overflow: auto; margin: 0; padding: 10px 12px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
 
-  /* ---------- Landscape-only ---------- */
-  .rotate {
-    display: none; position: fixed; inset: 0; z-index: 100; background: var(--header); color: #fff;
-    flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 30px;
-    font-family: var(--font-display);
-  }
-  .rotate .phone { font-size: 3rem; display: inline-block; animation: turn 2.2s ease-in-out infinite; }
-  @keyframes turn { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
-  .rotate p { margin: 0; font-size: 1.2rem; font-weight: 700; }
-  @media (orientation: portrait) and (max-width: 900px) { .rotate { display: flex; } }
-
   /* Short landscape phones: tighten the modal */
   @media (max-height: 420px) {
     .sheet { height: 100%; }
@@ -248,8 +237,47 @@
     .edit-btn { width: 34px; height: 34px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .sheet, .rotate .phone { animation: none; }
+    .sheet { animation: none; }
     .tile, .toast { transition: none; }
+  }
+
+  /* ---------- Master list (shown in portrait only) ---------- */
+  .master { display: none; }
+  .mgroup { margin-bottom: 10px; border-radius: 16px; background: var(--paper); overflow: clip; }
+  .mhead {
+    position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 0; background: var(--c); color: #2b3340; font-family: var(--font-display); font-weight: 800;
+    font-size: 1rem; text-align: left; padding: 9px 10px 9px 12px; cursor: pointer;
+  }
+  .micon { display: inline-flex; font-size: 1.3rem; line-height: 1; }
+  .micon svg { display: block; }
+  .mtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mcount { font-family: var(--font-body); font-size: .8rem; font-weight: 700; background: rgba(255,255,255,.55); padding: 3px 10px; border-radius: 999px; }
+  .mplus { width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.12); display: grid; place-items: center; font-size: 1.15rem; line-height: 1; }
+  .mrow {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px;
+    border: 0; border-top: 1px solid color-mix(in srgb, var(--c) 22%, var(--paper));
+    background: var(--paper); color: var(--ink); font: inherit; font-size: 1rem; font-weight: 600;
+    text-align: left; padding: 10px 14px; cursor: pointer;
+  }
+  .mrow:active { background: color-mix(in srgb, var(--c) 14%, var(--paper)); }
+  .mrow .name { overflow: hidden; text-overflow: ellipsis; }
+  .mrow.done { opacity: .7; }
+  .mrow.done .name { text-decoration: line-through; color: var(--ink-soft); }
+  .mrow.done .box { background: var(--c); border-color: color-mix(in srgb, var(--c) 55%, #4a4a58); }
+  .master-empty { color: var(--ink-soft); text-align: center; padding: 28px 20px; font-size: .95rem; line-height: 1.4; }
+
+  /* ---------- Portrait: mini map on top, master list below ---------- */
+  @media (orientation: portrait) {
+    .map { flex: none; height: min(40%, calc((100vw - 20px) * .78)); margin: 8px 10px 6px; gap: 5px; }
+    .tile { padding: 3px; border-radius: 10px; gap: 1px; box-shadow: 0 2px 0 rgba(0,0,0,.18); }
+    .tile .icon { font-size: clamp(1rem, 5.4vw, 1.7rem); }
+    .tile .label, .tile.aisle .label { font-size: clamp(.6rem, 2.7vw, .85rem); }
+    .tile.aisle .label { font-size: clamp(.9rem, 4.4vw, 1.3rem); }
+    .tile .sub { display: none; }
+    .badge { top: 3px; right: 3px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; font-size: .72rem; }
+    .master { display: block; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 10px; }
+    .master-inner { padding: 4px 0 64px; }
   }
 
   /* ---------- Portrait: the open list goes on top, the add options below ---------- */
@@ -257,8 +285,6 @@
     .sheet { width: min(560px, 100%); height: 100%; grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1.3fr) minmax(0, 1fr); }
     .pane + .pane { border-left: 0; border-top: 1px solid var(--shelf); }
   }
-  /* The "turn sideways" screen only covers the store map, never an open list */
-  body.modal-open .rotate { display: none; }
 </style>
 </head>
 <body>
@@ -268,6 +294,9 @@
     <div class="hright"><span class="sync" id="sync"></span><span class="total" id="total"></span></div>
   </header>
   <main class="map" id="map"></main>
+  <section class="master" id="master" aria-label="Everything on the list">
+    <div class="master-inner" id="masterInner"></div>
+  </section>
 </div>
 
 <div class="backdrop" id="backdrop">
@@ -323,7 +352,6 @@
   <pre id="diagOut">Running checks…</pre>
 </div>
 
-<div class="rotate"><div class="phone">📱</div><p>Turn your phone sideways</p></div>
 
 <script type="module">
 /* Install signals. Registered first, before anything is awaited, so Chrome's event isn't missed. */
@@ -636,12 +664,10 @@ function openArea(id) {
   $("addBtn").classList.toggle("dark-text", !!current.dark);
   $("newItem").value = "";
   $("backdrop").classList.add("open");
-  document.body.classList.add("modal-open");
   renderModal();
 }
 function closeModal() {
   $("backdrop").classList.remove("open");
-  document.body.classList.remove("modal-open");
   current = null;
   editingId = null;
   editingDefaults = false;
@@ -716,7 +742,52 @@ function renderModal() {
   });
 }
 
-function refresh() { renderMap(); renderModal(); }
+/* ---------- Master list (portrait view): everything on the list, grouped by zone in walking order ---------- */
+const MASTER_ORDER = ["produce", "cold", "aisle1", "aisle2", "aisle3", "meat", "frozen", "deli", "beer"];
+function renderMaster() {
+  const box = document.getElementById("masterInner");
+  box.innerHTML = "";
+  let any = false;
+  MASTER_ORDER.forEach(id => {
+    const area = AREAS.find(a => a.id === id);
+    if (!area) return;
+    const mine = items.filter(i => i.area === id).sort((a, b) => a.checked - b.checked || a.ts - b.ts);
+    if (!mine.length) return;
+    any = true;
+    const left = mine.filter(i => !i.checked).length;
+    const sec = document.createElement("section");
+    sec.className = "mgroup";
+    sec.style.setProperty("--c", area.color);
+    const head = document.createElement("button");
+    head.className = "mhead";
+    head.setAttribute("aria-label", "Add to " + (area.title || area.label));
+    head.innerHTML = '<span class="micon">' + (area.icon || "") + '</span><span class="mtitle"></span><span class="mcount"></span><span class="mplus">+</span>';
+    head.querySelector(".mtitle").textContent = area.title || area.label;
+    head.querySelector(".mcount").textContent = left ? left + " left" : "Done ✓";
+    head.addEventListener("click", () => openArea(id));
+    sec.appendChild(head);
+    mine.forEach(it => {
+      const row = document.createElement("button");
+      row.className = "mrow" + (it.checked ? " done" : "");
+      row.innerHTML = '<span class="box">' + (it.checked ? "✓" : "") + '</span><span class="txt"><span class="name"></span><span class="note"></span></span>';
+      row.querySelector(".name").textContent = it.name;
+      const noteEl = row.querySelector(".note");
+      noteEl.textContent = it.note || "";
+      if (!it.note) noteEl.remove();
+      row.addEventListener("click", () => toggleItem(it.id));
+      sec.appendChild(row);
+    });
+    box.appendChild(sec);
+  });
+  if (!any) {
+    const e = document.createElement("div");
+    e.className = "master-empty";
+    e.textContent = "Nothing on the list yet. Tap a section on the map to add items.";
+    box.appendChild(e);
+  }
+}
+
+function refresh() { renderMap(); renderMaster(); renderModal(); }
 
 let scrollToEnd = false;
 
